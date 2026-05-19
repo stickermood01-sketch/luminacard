@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -24,7 +24,7 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
   const [deckTitle, setDeckTitle] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   
-  const { addDeck, addCards } = useLuminaStore();
+  const { addDeck, addCards, cards } = useLuminaStore();
   const { toast } = useToast();
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -37,23 +37,17 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
       
       setStep('extracting');
       try {
-        console.log("Iniciando extração do arquivo:", file.name);
         const text = await extractTextFromPdf(file);
-        console.log("Texto extraído com sucesso. Tamanho:", text.length);
-        
-        // Sincroniza o texto extraído diretamente com o estado content
         setContent(text);
-        
         setStep('idle');
         toast({
           title: "PDF processado",
           description: `${file.name} foi lido com sucesso.`,
         });
       } catch (error: any) {
-        console.error('Falha na extração do PDF:', error);
         toast({
           title: "Falha na extração",
-          description: error.message || "Não foi possível ler o conteúdo do PDF. Tente colar o texto manualmente.",
+          description: error.message || "Não foi possível ler o conteúdo do PDF.",
           variant: "destructive"
         });
         setPdfFile(null);
@@ -71,12 +65,6 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
   };
 
   const handleGenerate = async () => {
-    // Logs de debug conforme solicitado
-    console.log("--- DEBUG GERAÇÃO ---");
-    console.log("Título do Deck:", deckTitle);
-    console.log("Conteúdo (content):", content ? `Presente (${content.length} chars)` : "VAZIO");
-    console.log("Tópico:", topic);
-
     if (!deckTitle.trim()) {
       toast({
         title: "Título obrigatório",
@@ -97,15 +85,18 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
 
     setStep('generating');
     try {
-      console.log("Chamando flow generateFlashcardsFromPdf...");
+      // Get all current questions to avoid duplicates
+      const existingQuestions = cards.map(c => c.front);
+
       const result = await generateFlashcardsFromPdf({
         pdfTextContent: content,
         topic: topic.trim() || undefined,
-        numberOfFlashcards: 10
+        numberOfFlashcards: 10,
+        existingQuestions: existingQuestions
       });
 
       if (!result.flashcards || result.flashcards.length === 0) {
-        throw new Error("A IA não retornou nenhum flashcard. Tente fornecer mais material.");
+        throw new Error("A IA não retornou nenhum flashcard único. Tente fornecer mais material.");
       }
 
       const deckId = uuidv4();
@@ -134,7 +125,6 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
       addCards(newCards);
 
       setStep('success');
-      console.log("Geração concluída com sucesso!");
       
       setTimeout(() => {
         onClose();
@@ -142,7 +132,6 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
       }, 1500);
 
     } catch (error: any) {
-      console.error("Geração falhou:", error);
       toast({
         title: "Erro na geração",
         description: error.message || "Ocorreu um problema ao gerar seus flashcards.",
@@ -165,7 +154,7 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
               <CheckCircle2 className="w-10 h-10" />
             </div>
             <h2 className="text-2xl font-bold">Deck Criado!</h2>
-            <p className="text-muted-foreground mt-2">Seus flashcards com IA estão prontos para estudo.</p>
+            <p className="text-muted-foreground mt-2">Seus flashcards únicos com IA estão prontos.</p>
           </div>
         ) : (
           <>
@@ -175,7 +164,7 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
                 Gerar Flashcards com IA
               </DialogTitle>
               <DialogDescription>
-                Faça o upload de um PDF ou cole suas anotações para análise do Gemini.
+                Faça o upload de um PDF ou cole suas anotações para análise dinâmica do Gemini.
               </DialogDescription>
             </DialogHeader>
 
@@ -251,9 +240,6 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
                   onChange={(e) => setContent(e.target.value)}
                   disabled={isProcessing}
                 />
-                {pdfFile && content && (
-                  <p className="text-[10px] text-primary italic">Texto extraído com sucesso. Você pode editá-lo antes de gerar.</p>
-                )}
               </div>
 
               <div className="space-y-2">
@@ -270,7 +256,7 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
 
               <div className="flex items-start gap-2 p-3 bg-primary/5 rounded-lg text-[10px] text-muted-foreground border border-primary/10">
                 <AlertCircle className="w-3.5 h-3.5 text-primary shrink-0" />
-                <span>O Gemini criará cartões otimizados com base no texto acima.</span>
+                <span>O Gemini garantirá que nenhum cartão seja repetido e criará um mix de dificuldades.</span>
               </div>
             </div>
 
@@ -284,7 +270,7 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
                 {step === 'generating' ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />
-                    Gerando Decks...
+                    Gerando Unicidade...
                   </>
                 ) : (
                   <>

@@ -15,6 +15,7 @@ const GenerateFlashcardsFromPdfInputSchema = z.object({
   pdfTextContent: z.string().describe('The extracted text content from the PDF document.'),
   topic: z.string().optional().describe('An optional topic or context for the PDF content, to guide flashcard generation.'),
   numberOfFlashcards: z.number().int().min(1).optional().describe('The desired number of flashcards to generate.').default(10),
+  existingQuestions: z.array(z.string()).optional().describe('A list of already existing questions to avoid duplicates.'),
 });
 export type GenerateFlashcardsFromPdfInput = z.infer<typeof GenerateFlashcardsFromPdfInputSchema>;
 
@@ -22,6 +23,7 @@ export type GenerateFlashcardsFromPdfInput = z.infer<typeof GenerateFlashcardsFr
 const FlashcardSchema = z.object({
   front: z.string().describe('The question or term on the front of the flashcard.'),
   back: z.string().describe('The answer or definition on the back of the flashcard.'),
+  difficulty: z.enum(['easy', 'medium', 'hard']).optional().describe('The difficulty level of the card.'),
 });
 
 const GenerateFlashcardsFromPdfOutputSchema = z.object({
@@ -41,7 +43,40 @@ const generateFlashcardsPrompt = ai.definePrompt({
   name: 'generateFlashcardsFromPdfPrompt',
   input: { schema: GenerateFlashcardsFromPdfInputSchema },
   output: { schema: GenerateFlashcardsFromPdfOutputSchema },
-  prompt: `You are an expert educator tasked with creating high-quality flashcards from study material.\nYour goal is to extract key concepts, definitions, and questions from the provided 'pdfTextContent' and turn them into concise flashcards.\n\nInstructions:\n1. Read the provided 'pdfTextContent' carefully.\n2. Identify the most important concepts, terms, and facts.\n3. For each key concept, create one flashcard with a 'front' (question/term) and a 'back' (answer/definition).\n4. If a 'topic' is provided, prioritize flashcards relevant to that topic.\n5. Generate approximately {{{numberOfFlashcards}}} flashcards, focusing on the most important information.\n6. Ensure the 'front' is a clear question or term and the 'back' is a concise and accurate answer or definition.\n\nPDF Text Content:\n{{{pdfTextContent}}}\n\n{{#if topic}}\nTopic: {{{topic}}}\n{{/if}}\n\nOutput the flashcards as a JSON array of objects, where each object has a 'front' and 'back' field.`,
+  config: {
+    temperature: 1.0,
+  },
+  prompt: `You are an expert educator tasked with creating high-quality, unique flashcards from study material.
+Your goal is to extract key concepts, definitions, and questions from the provided 'pdfTextContent' and turn them into concise flashcards.
+
+Instructions:
+1. Read the provided 'pdfTextContent' carefully.
+2. Identify the most important concepts, terms, and facts.
+3. For each key concept, create one flashcard with a 'front' (question/term) and a 'back' (answer/definition).
+4. If a 'topic' is provided, prioritize flashcards relevant to that topic.
+5. Generate approximately {{{numberOfFlashcards}}} flashcards.
+6. **UNQUENESS IS CRITICAL**: Review the 'existingQuestions' list below. DO NOT repeat any of these questions or create very similar ones. Every card generated now must be NEW and provide fresh value.
+7. **DIFFICULTY MIX**: Ensure a balanced mix of difficulty levels:
+   - 30% Easy (basic definitions and simple facts)
+   - 40% Medium (conceptual understanding and relationship between ideas)
+   - 30% Hard (application of knowledge, analysis, or complex problem-solving)
+8. Ensure the 'front' is a clear question or term and the 'back' is a concise and accurate answer or definition.
+
+PDF Text Content:
+{{{pdfTextContent}}}
+
+{{#if existingQuestions}}
+Existing Questions (DO NOT REPEAT):
+{{#each existingQuestions}}
+- {{{this}}}
+{{/each}}
+{{/if}}
+
+{{#if topic}}
+Topic: {{{topic}}}
+{{/if}}
+
+Output the flashcards as a JSON array of objects, where each object has a 'front' and 'back' field.`,
 });
 
 // Flow definition
