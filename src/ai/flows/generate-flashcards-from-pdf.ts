@@ -38,7 +38,7 @@ export async function generateFlashcardsFromPdf(
   return generateFlashcardsFromPdfFlow(input);
 }
 
-// Prompt definition
+// Prompt definition for Gemini
 const generateFlashcardsPrompt = ai.definePrompt({
   name: 'generateFlashcardsFromPdfPrompt',
   input: { schema: GenerateFlashcardsFromPdfInputSchema },
@@ -79,6 +79,74 @@ Topic: {{{topic}}}
 Output the flashcards as a JSON array of objects, where each object has a 'front' and 'back' field.`,
 });
 
+/**
+ * Fallback function to call DeepSeek API if Gemini fails.
+ */
+async function callDeepSeekFallback(input: GenerateFlashcardsFromPdfInput): Promise<GenerateFlashcardsFromPdfOutput> {
+  const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
+
+  if (!DEEPSEEK_API_KEY) {
+    throw new Error('Gemini failed and DEEPSEEK_API_KEY is not configured for fallback.');
+  }
+
+  const existingQuestionsText = input.existingQuestions?.length 
+    ? `\nExisting Questions (DO NOT REPEAT):\n${input.existingQuestions.map(q => `- ${q}`).join('\n')}` 
+    : '';
+
+  const topicText = input.topic ? `\nTopic: ${input.topic}` : '';
+
+  const systemPrompt = `You are an expert educator tasked with creating high-quality, unique flashcards from study material.
+Your goal is to extract key concepts, definitions, and questions from the provided 'pdfTextContent' and turn them into concise flashcards.
+Output MUST be a JSON object with a "flashcards" property containing an array of objects with "front", "back", and "difficulty" fields.`;
+
+  const userPrompt = `Instructions:
+1. Read the provided 'pdfTextContent' carefully.
+2. Identify the most important concepts, terms, and facts.
+3. For each key concept, create one flashcard with a 'front' (question/term) and a 'back' (answer/definition).
+4. If a 'topic' is provided, prioritize flashcards relevant to that topic.
+5. Generate approximately ${input.numberOfFlashcards || 10} flashcards.
+6. **UNQUENESS IS CRITICAL**: DO NOT repeat any of the existing questions. Every card generated now must be NEW.
+7. **DIFFICULTY MIX**: Ensure a balanced mix of difficulty levels: 30% Easy, 40% Medium, 30% Hard.
+
+PDF Text Content:
+${input.pdfTextContent}
+${existingQuestionsText}
+${topicText}
+
+Return JSON format: {"flashcards": [{"front": "...", "back": "...", "difficulty": "easy|medium|hard"}]}`;
+
+  const response = await fetch('https://api.deepseek.com/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
+    },
+    body: JSON.stringify({
+      model: 'deepseek-chat',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ],
+      temperature: 1.0,
+      response_format: { type: 'json_object' }
+    })
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(`DeepSeek API error: ${errorData.error?.message || response.statusText}`);
+  }
+
+  const data = await response.json();
+  const content = data.choices[0]?.message?.content;
+
+  if (!content) {
+    throw new Error('DeepSeek returned an empty response.');
+  }
+
+  return JSON.parse(content) as GenerateFlashcardsFromPdfOutput;
+}
+
 // Flow definition
 const generateFlashcardsFromPdfFlow = ai.defineFlow(
   {
@@ -87,10 +155,23 @@ const generateFlashcardsFromPdfFlow = ai.defineFlow(
     outputSchema: GenerateFlashcardsFromPdfOutputSchema,
   },
   async (input) => {
-    const { output } = await generateFlashcardsPrompt(input);
-    if (!output) {
-      throw new Error('Failed to generate flashcards.');
+    try {
+      // Primary provider: Gemini
+      const { output } = await generateFlashcardsPrompt(input);
+      if (!output) {
+        throw new Error('Gemini returned empty output.');
+      }
+      return output;
+    } catch (error: any) {
+      console.error('Gemini failed, attempting DeepSeek fallback...', error.message || error);
+      
+      try {
+        // Fallback provider: DeepSeek
+        return await callDeepSeekFallback(input);
+      } catch (fallbackError: any) {
+        console.error('DeepSeek fallback also failed:', fallbackError.message || fallbackError);
+        throw new Error(`Failed to generate flashcards. (Gemini: ${error.message}, DeepSeek: ${fallbackError.message})`);
+      }
     }
-    return output;
   }
 );
