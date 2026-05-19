@@ -31,13 +31,6 @@ const GenerateFlashcardsFromPdfOutputSchema = z.object({
 });
 export type GenerateFlashcardsFromPdfOutput = z.infer<typeof GenerateFlashcardsFromPdfOutputSchema>;
 
-// Wrapper function for the flow
-export async function generateFlashcardsFromPdf(
-  input: GenerateFlashcardsFromPdfInput
-): Promise<GenerateFlashcardsFromPdfOutput> {
-  return generateFlashcardsFromPdfFlow(input);
-}
-
 // Prompt definition for Gemini
 const generateFlashcardsPrompt = ai.definePrompt({
   name: 'generateFlashcardsFromPdfPrompt',
@@ -80,85 +73,19 @@ Output the flashcards as a JSON array of objects, where each object has a 'front
 });
 
 /**
- * Fallback function to call DeepSeek API if Gemini fails.
+ * Generates flashcards using Gemini AI.
  */
-async function callDeepSeekFallback(input: GenerateFlashcardsFromPdfInput): Promise<GenerateFlashcardsFromPdfOutput> {
-  const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
-
-  if (!DEEPSEEK_API_KEY) {
-    console.error('DeepSeek Fallback requested but DEEPSEEK_API_KEY is missing.');
-    throw new Error('Fallback provider (DeepSeek) is not configured. Check your environment variables.');
+async function generateWithGemini(input: GenerateFlashcardsFromPdfInput): Promise<GenerateFlashcardsFromPdfOutput> {
+  const { output } = await generateFlashcardsPrompt(input);
+  if (!output || !output.flashcards || output.flashcards.length === 0) {
+    throw new Error('Gemini failed to generate flashcards.');
   }
-
-  const existingQuestionsText = input.existingQuestions?.length 
-    ? `\nExisting Questions (DO NOT REPEAT ANY OF THESE):\n${input.existingQuestions.map(q => `- ${q}`).join('\n')}` 
-    : '';
-
-  const topicText = input.topic ? `\nFocus Topic: ${input.topic}` : '';
-
-  const systemPrompt = `You are an expert educator. Extract key concepts from study material to create unique flashcards.
-Output MUST be a JSON object with a "flashcards" property containing an array of objects with "front", "back", and "difficulty" fields.
-Ensure 30% Easy, 40% Medium, 30% Hard questions.
-CRITICAL: Do NOT repeat any questions provided in the 'Existing Questions' list.`;
-
-  const userPrompt = `Generate ${input.numberOfFlashcards || 10} unique flashcards from this content:
-
-${input.pdfTextContent}
-${topicText}
-${existingQuestionsText}
-
-Return JSON format only: {"flashcards": [{"front": "...", "back": "...", "difficulty": "easy"}]}`;
-
-  try {
-    const response = await fetch('https://api.deepseek.com/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: 'deepseek-chat',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        temperature: 1.0,
-        response_format: { type: 'json_object' }
-      })
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(`DeepSeek API error (${response.status}): ${errorData.error?.message || response.statusText}`);
-    }
-
-    const data = await response.json();
-    let content = data.choices[0]?.message?.content;
-
-    if (!content) {
-      throw new Error('DeepSeek returned an empty response.');
-    }
-
-    // Clean Markdown blocks if present
-    if (content.includes('```json')) {
-      content = content.split('```json')[1].split('```')[0].trim();
-    } else if (content.includes('```')) {
-      content = content.split('```')[1].split('```')[0].trim();
-    }
-
-    const parsed = JSON.parse(content);
-    if (!parsed.flashcards) {
-      throw new Error('DeepSeek JSON is missing "flashcards" property.');
-    }
-
-    return parsed as GenerateFlashcardsFromPdfOutput;
-  } catch (error: any) {
-    console.error('DeepSeek Fallback failed definitively:', error.message);
-    throw error;
-  }
+  return output;
 }
 
-// Flow definition
+/**
+ * Flow definition
+ */
 const generateFlashcardsFromPdfFlow = ai.defineFlow(
   {
     name: 'generateFlashcardsFromPdfFlow',
@@ -167,33 +94,20 @@ const generateFlashcardsFromPdfFlow = ai.defineFlow(
   },
   async (input) => {
     console.log(`[AI Flow] Starting generation for: ${input.topic || 'General'}`);
-    
-    // TIER 1: GOOGLE GEMINI
-    try {
-      console.log('[AI Flow] Attempting primary provider: Gemini...');
-      const { output } = await generateFlashcardsPrompt(input);
-      
-      if (!output || !output.flashcards || output.flashcards.length === 0) {
-        throw new Error('Gemini returned empty flashcards.');
-      }
-      
-      console.log('[AI Flow] Success: Gemini generated', output.flashcards.length, 'cards.');
-      return output;
-    } catch (geminiError: any) {
-      // Log the error but DO NOT throw. Switch to fallback immediately.
-      const errorMsg = geminiError.message || 'Unknown Gemini error';
-      console.warn(`[AI Flow] Gemini failed (${errorMsg}). Switching to DeepSeek fallback SILENTLY...`);
-
-      // TIER 2: DEEPSEEK FALLBACK
-      try {
-        const result = await callDeepSeekFallback(input);
-        console.log('[AI Flow] Success: DeepSeek fallback generated', result.flashcards.length, 'cards.');
-        return result;
-      } catch (deepseekError: any) {
-        // Only if both fail do we throw an error to the UI
-        console.error('[AI Flow] Critical: Both Gemini and DeepSeek failed.');
-        throw new Error('Unable to generate flashcards: Both AI providers are currently unavailable. Please check quotas.');
-      }
-    }
+    return generateWithGemini(input);
   }
 );
+
+/**
+ * Wrapper function for the flow to be called from the client.
+ */
+export async function generateFlashcardsFromPdf(
+  input: GenerateFlashcardsFromPdfInput
+): Promise<GenerateFlashcardsFromPdfOutput> {
+  try {
+    return await generateFlashcardsFromPdfFlow(input);
+  } catch (error: any) {
+    console.error('[AI Flow Error]', error);
+    throw new Error(error.message || 'Internal AI Error');
+  }
+}
