@@ -1,3 +1,4 @@
+
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
@@ -67,11 +68,7 @@ function calculateSM2(grade: number, prevInterval: number, prevEase: number, rep
   };
 }
 
-// In a real app with Supabase/Firebase, this would be a server-side store or hooks
-// For this demo, we use Zustand with persistence.
-import { create as createZustand } from 'zustand';
-
-export const useLuminaStore = createZustand<LuminaState>()(
+export const useLuminaStore = create<LuminaState>()(
   persist(
     (set) => ({
       decks: [],
