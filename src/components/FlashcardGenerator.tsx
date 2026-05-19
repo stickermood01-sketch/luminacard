@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -19,7 +19,7 @@ type GenerationStep = 'idle' | 'extracting' | 'generating' | 'success';
 export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
   const [step, setStep] = useState<GenerationStep>('idle');
   const [pdfFile, setPdfFile] = useState<File | null>(null);
-  const [content, setContent] = useState(""); // Estado unificado para o texto do PDF ou manual
+  const [content, setContent] = useState("");
   const [topic, setTopic] = useState('');
   const [deckTitle, setDeckTitle] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -37,15 +37,20 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
       
       setStep('extracting');
       try {
+        console.log("Iniciando extração do arquivo:", file.name);
         const text = await extractTextFromPdf(file);
-        setContent(text); // Sincroniza texto extraído com o estado content
+        console.log("Texto extraído com sucesso. Tamanho:", text.length);
+        
+        // Sincroniza o texto extraído diretamente com o estado content
+        setContent(text);
+        
         setStep('idle');
         toast({
           title: "PDF processado",
           description: `${file.name} foi lido com sucesso.`,
         });
       } catch (error: any) {
-        console.error('PDF extraction failed:', error);
+        console.error('Falha na extração do PDF:', error);
         toast({
           title: "Falha na extração",
           description: error.message || "Não foi possível ler o conteúdo do PDF. Tente colar o texto manualmente.",
@@ -66,12 +71,11 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
   };
 
   const handleGenerate = async () => {
-    // Debug do conteúdo antes da geração
-    console.log("Iniciando geração de flashcards...");
+    // Logs de debug conforme solicitado
+    console.log("--- DEBUG GERAÇÃO ---");
     console.log("Título do Deck:", deckTitle);
+    console.log("Conteúdo (content):", content ? `Presente (${content.length} chars)` : "VAZIO");
     console.log("Tópico:", topic);
-    console.log("Conteúdo (length):", content.length);
-    console.log("Conteúdo (preview):", content.substring(0, 100) + "...");
 
     if (!deckTitle.trim()) {
       toast({
@@ -85,7 +89,7 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
     if (!content.trim()) {
       toast({
         title: "Conteúdo ausente",
-        description: "Por favor, faça upload de um PDF ou cole o texto do seu estudo.",
+        description: "O conteúdo para estudo está vazio. Faça o upload de um PDF ou cole seu texto.",
         variant: "destructive"
       });
       return;
@@ -93,14 +97,15 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
 
     setStep('generating');
     try {
+      console.log("Chamando flow generateFlashcardsFromPdf...");
       const result = await generateFlashcardsFromPdf({
-        pdfTextContent: content, // Usando o estado content que contém o texto do PDF
+        pdfTextContent: content,
         topic: topic.trim() || undefined,
         numberOfFlashcards: 10
       });
 
       if (!result.flashcards || result.flashcards.length === 0) {
-        throw new Error("A IA não retornou nenhum flashcard. Tente fornecer mais contexto.");
+        throw new Error("A IA não retornou nenhum flashcard. Tente fornecer mais material.");
       }
 
       const deckId = uuidv4();
@@ -129,16 +134,18 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
       addCards(newCards);
 
       setStep('success');
+      console.log("Geração concluída com sucesso!");
+      
       setTimeout(() => {
         onClose();
         resetForm();
-      }, 2000);
+      }, 1500);
 
     } catch (error: any) {
       console.error("Geração falhou:", error);
       toast({
         title: "Erro na geração",
-        description: error.message || "Ocorreu um problema ao gerar seus flashcards. Tente novamente.",
+        description: error.message || "Ocorreu um problema ao gerar seus flashcards.",
         variant: "destructive"
       });
       setStep('idle');
@@ -168,7 +175,7 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
                 Gerar Flashcards com IA
               </DialogTitle>
               <DialogDescription>
-                Faça o upload de um PDF ou cole suas anotações. O Gemini analisará tudo para você.
+                Faça o upload de um PDF ou cole suas anotações para análise do Gemini.
               </DialogDescription>
             </DialogHeader>
 
@@ -177,7 +184,7 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
                 <Label htmlFor="deckTitle">Título do Deck</Label>
                 <Input 
                   id="deckTitle" 
-                  placeholder="Ex: Biologia Marinha - Cap. 2" 
+                  placeholder="Ex: Resumo de História" 
                   value={deckTitle}
                   onChange={(e) => setDeckTitle(e.target.value)}
                   className="bg-background"
@@ -218,7 +225,7 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
                     </div>
                     <div className="overflow-hidden">
                       <p className="text-sm font-medium truncate max-w-[200px]">{pdfFile.name}</p>
-                      <p className="text-[10px] text-muted-foreground">PDF Processado ({content.length} caracteres)</p>
+                      <p className="text-[10px] text-muted-foreground">PDF carregado ({content.length} caracteres)</p>
                     </div>
                   </div>
                   <Button variant="ghost" size="icon" onClick={resetForm} disabled={isProcessing}>
@@ -238,14 +245,14 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
                 <Label htmlFor="content">Conteúdo para Estudo</Label>
                 <Textarea 
                   id="content" 
-                  placeholder="Cole seu texto aqui ou envie um PDF acima para extração..." 
+                  placeholder="O texto extraído do PDF aparecerá aqui ou você pode colar manualmente..." 
                   className="min-h-[120px] bg-background resize-none text-xs"
                   value={content}
                   onChange={(e) => setContent(e.target.value)}
                   disabled={isProcessing}
                 />
-                {pdfFile && (
-                  <p className="text-[10px] text-primary italic">Texto extraído do PDF. Você pode editá-lo se necessário.</p>
+                {pdfFile && content && (
+                  <p className="text-[10px] text-primary italic">Texto extraído com sucesso. Você pode editá-lo antes de gerar.</p>
                 )}
               </div>
 
@@ -253,7 +260,7 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
                 <Label htmlFor="topic">Tópico de Foco (Opcional)</Label>
                 <Input 
                   id="topic" 
-                  placeholder="Ex: Focar em definições e termos técnicos" 
+                  placeholder="Ex: Focar em fórmulas matemáticas" 
                   value={topic}
                   onChange={(e) => setTopic(e.target.value)}
                   className="bg-background"
@@ -263,7 +270,7 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
 
               <div className="flex items-start gap-2 p-3 bg-primary/5 rounded-lg text-[10px] text-muted-foreground border border-primary/10">
                 <AlertCircle className="w-3.5 h-3.5 text-primary shrink-0" />
-                <span>O Gemini criará cartões otimizados baseados no texto acima.</span>
+                <span>O Gemini criará cartões otimizados com base no texto acima.</span>
               </div>
             </div>
 
@@ -271,7 +278,7 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
               <Button variant="ghost" onClick={onClose} disabled={isProcessing}>Cancelar</Button>
               <Button 
                 onClick={handleGenerate} 
-                disabled={isProcessing || !content.trim()}
+                disabled={isProcessing || !content.trim() || !deckTitle.trim()}
                 className="bg-primary hover:bg-primary/90 min-w-[140px] gap-2"
               >
                 {step === 'generating' ? (
