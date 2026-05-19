@@ -86,7 +86,8 @@ async function callDeepSeekFallback(input: GenerateFlashcardsFromPdfInput): Prom
   const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
 
   if (!DEEPSEEK_API_KEY) {
-    throw new Error('Gemini failed and DEEPSEEK_API_KEY is not provided in environment variables.');
+    console.error('DeepSeek Fallback requested but DEEPSEEK_API_KEY is missing.');
+    throw new Error('Fallback provider (DeepSeek) is not configured. Check your environment variables.');
   }
 
   const existingQuestionsText = input.existingQuestions?.length 
@@ -108,47 +109,52 @@ ${existingQuestionsText}
 
 Return JSON format only: {"flashcards": [{"front": "...", "back": "...", "difficulty": "easy"}]}`;
 
-  const response = await fetch('https://api.deepseek.com/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
-    },
-    body: JSON.stringify({
-      model: 'deepseek-chat',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
-      ],
-      temperature: 1.0,
-      response_format: { type: 'json_object' }
-    })
-  });
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(`DeepSeek API error (${response.status}): ${errorData.error?.message || response.statusText}`);
-  }
-
-  const data = await response.json();
-  let content = data.choices[0]?.message?.content;
-
-  if (!content) {
-    throw new Error('DeepSeek returned an empty response.');
-  }
-
-  // Handle cases where DeepSeek might wrap JSON in markdown blocks
-  if (content.includes('```json')) {
-    content = content.split('```json')[1].split('```')[0].trim();
-  } else if (content.includes('```')) {
-    content = content.split('```')[1].split('```')[0].trim();
-  }
-
   try {
-    return JSON.parse(content) as GenerateFlashcardsFromPdfOutput;
-  } catch (e) {
-    console.error('Failed to parse DeepSeek JSON response:', content);
-    throw new Error('DeepSeek returned invalid JSON format.');
+    const response = await fetch('https://api.deepseek.com/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ],
+        temperature: 1.0,
+        response_format: { type: 'json_object' }
+      })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(`DeepSeek API error (${response.status}): ${errorData.error?.message || response.statusText}`);
+    }
+
+    const data = await response.json();
+    let content = data.choices[0]?.message?.content;
+
+    if (!content) {
+      throw new Error('DeepSeek returned an empty response.');
+    }
+
+    // Clean Markdown blocks if present
+    if (content.includes('```json')) {
+      content = content.split('```json')[1].split('```')[0].trim();
+    } else if (content.includes('```')) {
+      content = content.split('```')[1].split('```')[0].trim();
+    }
+
+    const parsed = JSON.parse(content);
+    if (!parsed.flashcards) {
+      throw new Error('DeepSeek JSON is missing "flashcards" property.');
+    }
+
+    return parsed as GenerateFlashcardsFromPdfOutput;
+  } catch (error: any) {
+    console.error('DeepSeek Fallback failed definitively:', error.message);
+    throw error;
   }
 }
 
@@ -160,30 +166,33 @@ const generateFlashcardsFromPdfFlow = ai.defineFlow(
     outputSchema: GenerateFlashcardsFromPdfOutputSchema,
   },
   async (input) => {
-    console.log(`Starting flashcard generation for topic: ${input.topic || 'General'}`);
+    console.log(`[AI Flow] Starting generation for: ${input.topic || 'General'}`);
     
+    // TIER 1: GOOGLE GEMINI
     try {
-      // Primary provider: Gemini
+      console.log('[AI Flow] Attempting primary provider: Gemini...');
       const { output } = await generateFlashcardsPrompt(input);
-      if (!output || !output.flashcards) {
-        throw new Error('Gemini returned an empty or malformed output.');
-      }
-      console.log('Successfully generated cards using Gemini.');
-      return output;
-    } catch (error: any) {
-      // Log the specific error to help debugging
-      const isQuotaError = error.message?.includes('429') || error.message?.includes('quota');
-      console.warn(`Gemini failed ${isQuotaError ? '(Quota/Rate Limit)' : ''}: ${error.message}. Switching to DeepSeek...`);
       
+      if (!output || !output.flashcards || output.flashcards.length === 0) {
+        throw new Error('Gemini returned empty flashcards.');
+      }
+      
+      console.log('[AI Flow] Success: Gemini generated', output.flashcards.length, 'cards.');
+      return output;
+    } catch (geminiError: any) {
+      // Log the error but DO NOT throw. Switch to fallback immediately.
+      const errorMsg = geminiError.message || 'Unknown Gemini error';
+      console.warn(`[AI Flow] Gemini failed (${errorMsg}). Switching to DeepSeek fallback SILENTLY...`);
+
+      // TIER 2: DEEPSEEK FALLBACK
       try {
-        // Fallback provider: DeepSeek
         const result = await callDeepSeekFallback(input);
-        console.log('Successfully generated cards using DeepSeek fallback.');
+        console.log('[AI Flow] Success: DeepSeek fallback generated', result.flashcards.length, 'cards.');
         return result;
-      } catch (fallbackError: any) {
-        console.error('DeepSeek fallback also failed:', fallbackError.message);
-        // Throw a meaningful error combining both failures
-        throw new Error(`Service Unavailable: Both Gemini and DeepSeek providers failed. Please check your API keys and quotas.`);
+      } catch (deepseekError: any) {
+        // Only if both fail do we throw an error to the UI
+        console.error('[AI Flow] Critical: Both Gemini and DeepSeek failed.');
+        throw new Error('Unable to generate flashcards: Both AI providers are currently unavailable. Please check quotas.');
       }
     }
   }
