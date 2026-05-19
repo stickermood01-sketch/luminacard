@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -32,6 +32,7 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
     const file = e.target.files?.[0];
     if (file && file.type === 'application/pdf') {
       setPdfFile(file);
+      // Se o título estiver vazio, usa o nome do arquivo
       if (!deckTitle) {
         setDeckTitle(file.name.replace('.pdf', ''));
       }
@@ -41,19 +42,24 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
         const text = await extractTextFromPdf(file);
         setPdfText(text);
         setStep('idle');
-      } catch (error) {
+        toast({
+          title: "PDF processado",
+          description: `${file.name} foi lido com sucesso.`,
+        });
+      } catch (error: any) {
         console.error('PDF extraction failed:', error);
         toast({
-          title: "Extraction failed",
-          description: "Could not read the PDF content. You can still paste text manually.",
+          title: "Falha na extração",
+          description: error.message || "Não foi possível ler o conteúdo do PDF. Tente colar o texto manualmente.",
           variant: "destructive"
         });
+        setPdfFile(null); // Reseta se falhar
         setStep('idle');
       }
     } else if (file) {
       toast({
-        title: "Invalid file type",
-        description: "Please upload a PDF file.",
+        title: "Arquivo inválido",
+        description: "Por favor, envie um arquivo PDF.",
         variant: "destructive"
       });
     }
@@ -68,10 +74,20 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
   };
 
   const handleGenerate = async () => {
-    if (!pdfText || !deckTitle) {
+    // Validação rigorosa
+    if (!deckTitle.trim()) {
       toast({
-        title: "Missing fields",
-        description: "Please provide content (upload PDF or paste text) and a deck title.",
+        title: "Título obrigatório",
+        description: "Por favor, dê um nome ao seu novo deck.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    if (!pdfText.trim()) {
+      toast({
+        title: "Conteúdo ausente",
+        description: "Por favor, faça upload de um PDF ou cole o texto do seu estudo.",
         variant: "destructive"
       });
       return;
@@ -81,16 +97,20 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
     try {
       const result = await generateFlashcardsFromPdf({
         pdfTextContent: pdfText,
-        topic: topic || undefined,
+        topic: topic.trim() || undefined,
         numberOfFlashcards: 10
       });
+
+      if (!result.flashcards || result.flashcards.length === 0) {
+        throw new Error("A IA não retornou nenhum flashcard. Tente fornecer mais contexto.");
+      }
 
       const deckId = uuidv4();
       
       const newDeck = {
         id: deckId,
-        title: deckTitle,
-        description: topic || "Generated from study material",
+        title: deckTitle.trim(),
+        description: topic.trim() || "Gerado automaticamente a partir do material de estudo",
         createdAt: new Date().toISOString(),
         cardCount: result.flashcards.length
       };
@@ -116,11 +136,11 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
         resetForm();
       }, 2000);
 
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
       toast({
-        title: "Generation failed",
-        description: "There was an error generating your flashcards. Please try again.",
+        title: "Erro na geração",
+        description: error.message || "Ocorreu um problema ao gerar seus flashcards. Tente novamente.",
         variant: "destructive"
       });
       setStep('idle');
@@ -139,27 +159,27 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
             <div className="w-16 h-16 bg-green-500/20 text-green-500 rounded-full flex items-center justify-center mb-4">
               <CheckCircle2 className="w-10 h-10" />
             </div>
-            <h2 className="text-2xl font-bold">Deck Created!</h2>
-            <p className="text-muted-foreground mt-2">Your AI flashcards are ready for review.</p>
+            <h2 className="text-2xl font-bold">Deck Criado!</h2>
+            <p className="text-muted-foreground mt-2">Seus flashcards com IA estão prontos para estudo.</p>
           </div>
         ) : (
           <>
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
                 <Sparkles className="w-5 h-5 text-primary" />
-                Create AI Flashcards
+                Gerar Flashcards com IA
               </DialogTitle>
               <DialogDescription>
-                Upload a PDF or paste your study notes. Gemini will do the rest.
+                Faça o upload de um PDF ou cole suas anotações. O Gemini analisará tudo para você.
               </DialogDescription>
             </DialogHeader>
 
             <div className="space-y-5 py-4">
               <div className="space-y-2">
-                <Label htmlFor="deckTitle">Deck Title</Label>
+                <Label htmlFor="deckTitle">Título do Deck</Label>
                 <Input 
                   id="deckTitle" 
-                  placeholder="e.g. Biology Exam - Ch. 4" 
+                  placeholder="Ex: Biologia Marinha - Cap. 2" 
                   value={deckTitle}
                   onChange={(e) => setDeckTitle(e.target.value)}
                   className="bg-background"
@@ -169,10 +189,10 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
 
               {!pdfFile && !pdfText ? (
                 <div 
-                  onClick={() => fileInputRef.current?.click()}
+                  onClick={() => !isProcessing && fileInputRef.current?.click()}
                   className={cn(
                     "border-2 border-dashed border-border rounded-xl p-8 flex flex-col items-center justify-center gap-3 cursor-pointer hover:border-primary/50 hover:bg-primary/5 transition-all group",
-                    step === 'extracting' && "pointer-events-none opacity-50"
+                    isProcessing && "pointer-events-none opacity-50"
                   )}
                 >
                   <input 
@@ -186,8 +206,8 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
                     <Upload className="w-6 h-6 text-muted-foreground group-hover:text-primary" />
                   </div>
                   <div className="text-center">
-                    <p className="font-medium">Click to upload PDF</p>
-                    <p className="text-xs text-muted-foreground">or paste text manually below</p>
+                    <p className="font-medium">Clique para enviar PDF</p>
+                    <p className="text-xs text-muted-foreground">ou cole o texto manualmente abaixo</p>
                   </div>
                 </div>
               ) : pdfFile && step !== 'extracting' ? (
@@ -198,7 +218,7 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
                     </div>
                     <div className="overflow-hidden">
                       <p className="text-sm font-medium truncate max-w-[200px]">{pdfFile.name}</p>
-                      <p className="text-[10px] text-muted-foreground">Text extracted successfully</p>
+                      <p className="text-[10px] text-muted-foreground">Texto extraído ({pdfText.length} caracteres)</p>
                     </div>
                   </div>
                   <Button variant="ghost" size="icon" onClick={resetForm} disabled={isProcessing}>
@@ -210,16 +230,16 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
               {step === 'extracting' && (
                 <div className="py-8 flex flex-col items-center justify-center gap-3 bg-secondary/20 rounded-xl animate-pulse">
                   <Loader2 className="w-8 h-8 text-primary animate-spin" />
-                  <p className="text-sm font-medium">Extracting text from PDF...</p>
+                  <p className="text-sm font-medium">Extraindo texto do PDF...</p>
                 </div>
               )}
 
               {(!pdfFile || pdfText) && step !== 'extracting' && (
                 <div className="space-y-2">
-                  <Label htmlFor="pdfText">Manual Content (Optional if PDF uploaded)</Label>
+                  <Label htmlFor="pdfText">Conteúdo para Estudo {pdfFile ? "(Extraído do PDF)" : ""}</Label>
                   <Textarea 
                     id="pdfText" 
-                    placeholder="Paste text here if you didn't upload a PDF..." 
+                    placeholder="Cole seu texto aqui ou envie um PDF acima..." 
                     className="min-h-[120px] bg-background resize-none text-xs"
                     value={pdfText}
                     onChange={(e) => setPdfText(e.target.value)}
@@ -229,10 +249,10 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
               )}
 
               <div className="space-y-2">
-                <Label htmlFor="topic">Focus Topic (Optional)</Label>
+                <Label htmlFor="topic">Tópico de Foco (Opcional)</Label>
                 <Input 
                   id="topic" 
-                  placeholder="e.g. Highlight the chemical formulas" 
+                  placeholder="Ex: Dê foco em fórmulas químicas" 
                   value={topic}
                   onChange={(e) => setTopic(e.target.value)}
                   className="bg-background"
@@ -242,26 +262,26 @@ export function FlashcardGenerator({ isOpen, onClose }: { isOpen: boolean, onClo
 
               <div className="flex items-start gap-2 p-3 bg-primary/5 rounded-lg text-[10px] text-muted-foreground border border-primary/10">
                 <AlertCircle className="w-3.5 h-3.5 text-primary shrink-0" />
-                <span>Gemini will analyze your content to generate approximately 10 optimized cards.</span>
+                <span>O Gemini criará aproximadamente 10 cartões otimizados para seu aprendizado.</span>
               </div>
             </div>
 
             <DialogFooter className="gap-2 sm:gap-0">
-              <Button variant="ghost" onClick={onClose} disabled={isProcessing}>Cancel</Button>
+              <Button variant="ghost" onClick={onClose} disabled={isProcessing}>Cancelar</Button>
               <Button 
                 onClick={handleGenerate} 
-                disabled={isProcessing || (!pdfText && !pdfFile)}
+                disabled={isProcessing || (!pdfText.trim() && !pdfFile)}
                 className="bg-primary hover:bg-primary/90 min-w-[140px] gap-2"
               >
                 {step === 'generating' ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />
-                    AI Thinking...
+                    IA Processando...
                   </>
                 ) : (
                   <>
                     <Sparkles className="w-4 h-4" />
-                    Generate Cards
+                    Gerar Flashcards
                   </>
                 )}
               </Button>
